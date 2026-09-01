@@ -67,21 +67,23 @@ async function resolveAttrValue(attr,rawValue,auth){
   const type=attr.type;
   if(type==="employee"||type==="counterparty"){
     const entity=type==="employee"?"employee":"counterparty";
-    const filter=encodeURIComponent(`name=${rawValue}`);
-    const r=await fetch(`${API_BASE}/entity/${entity}?filter=${filter}`,{headers:{Authorization:auth}});
-    if(!r.ok)throw new Error(`Не удалось найти "${rawValue}" в справочнике ${entity==="employee"?"Сотрудники":"Контрагенты"}`);
-    const data=await r.json(),row=data.rows?.[0];
-    if(!row)throw new Error(`Значение "${rawValue}" не найдено в справочнике ${entity==="employee"?"Сотрудники":"Контрагенты"} МойСклад`);
+    const r=await fetch(`${API_BASE}/entity/${entity}?limit=1000`,{headers:{Authorization:auth}});
+    if(!r.ok)throw new Error(`Не удалось получить справочник ${entity==="employee"?"Сотрудники":"Контрагенты"}`);
+    const data=await r.json(),rows=Array.isArray(data.rows)?data.rows:[];
+    const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+    const row=rows.find(x=>norm(x.name)===norm(rawValue));
+    if(!row)throw new Error(`Значение "${rawValue}" не найдено в справочнике ${entity==="employee"?"Сотрудники":"Контрагенты"}. Есть в МойСклад: ${rows.map(x=>x.name).join(" | ")||"(пусто)"}`);
     return {meta:row.meta};
   }
   if(type==="customentity"){
     const ceHref=attr.customEntityMeta?.href;
     if(!ceHref)throw new Error(`Не найден справочник для поля "${attr.name}"`);
-    const filter=encodeURIComponent(`name=${rawValue}`);
-    const r=await fetch(`${ceHref}?filter=${filter}`,{headers:{Authorization:auth}});
-    if(!r.ok)throw new Error(`Не удалось найти значение "${rawValue}" в справочнике поля "${attr.name}"`);
-    const data=await r.json(),row=data.rows?.[0];
-    if(!row)throw new Error(`Значение "${rawValue}" не найдено в справочнике поля "${attr.name}". Возможно, его нужно сначала добавить в МойСклад.`);
+    const r=await fetch(`${ceHref}?limit=1000`,{headers:{Authorization:auth}});
+    if(!r.ok)throw new Error(`Не удалось получить справочник поля "${attr.name}"`);
+    const data=await r.json(),rows=Array.isArray(data.rows)?data.rows:[];
+    const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+    const row=rows.find(x=>norm(x.name)===norm(rawValue));
+    if(!row)throw new Error(`Значение "${rawValue}" не найдено в справочнике поля "${attr.name}". Есть в МойСклад: ${rows.map(x=>x.name).join(" | ")||"(пусто)"}`);
     return {meta:row.meta};
   }
   return rawValue;
