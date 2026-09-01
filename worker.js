@@ -25,10 +25,15 @@ function getAttr(row,name){
   if(v&&typeof v==="object")return v.name??v.value??null;
   return v??null;
 }
-function getAttrObject(row,name){
-  const attrs=Array.isArray(row.attributes)?row.attributes:[];
+async function fetchAttrDefs(auth){
+  const r=await fetch(`${API_BASE}/entity/demand/metadata/attributes`,{headers:{Authorization:auth}});
+  if(!r.ok)throw new Error("Не удалось получить список полей отгрузки");
+  const data=await r.json();
+  return Array.isArray(data.rows)?data.rows:[];
+}
+function findAttrDef(defs,name){
   const n=String(name).trim().toLowerCase();
-  return attrs.find(x=>String(x.name||"").trim().toLowerCase()===n)||null;
+  return defs.find(x=>String(x.name||"").trim().toLowerCase()===n)||null;
 }
 async function findDemand(code,auth){
   const filter=encodeURIComponent(`name=${code}`);
@@ -70,9 +75,7 @@ async function resolveAttrValue(attr,rawValue,auth){
     return {meta:row.meta};
   }
   if(type==="customentity"){
-    const metaR=await fetch(attr.meta.href,{headers:{Authorization:auth}});
-    if(!metaR.ok)throw new Error(`Не удалось получить настройки поля "${attr.name}"`);
-    const metaData=await metaR.json(),ceHref=metaData.customEntityMeta?.href;
+    const ceHref=attr.customEntityMeta?.href;
     if(!ceHref)throw new Error(`Не найден справочник для поля "${attr.name}"`);
     const filter=encodeURIComponent(`name=${rawValue}`);
     const r=await fetch(`${ceHref}?filter=${filter}`,{headers:{Authorization:auth}});
@@ -103,20 +106,23 @@ async function handleCollect(req,auth){
   const state=(meta.states||[]).find(s=>s.name===STATUS_COLLECTED_NAME);
   if(!state)return json({error:`Статус "${STATUS_COLLECTED_NAME}" не найден в МойСклад`},500);
 
-  const picker1Attr=getAttrObject(d,PICKER_FIELD_1_NAME);
-  const picker2Attr=getAttrObject(d,PICKER_FIELD_2_NAME);
-  const placesAttr=getAttrObject(d,PLACES_FIELD_NAME);
-  if(!picker1Attr||!picker2Attr||!placesAttr){
-    const found=(Array.isArray(d.attributes)?d.attributes:[]).map(a=>`${a.name} [${a.type}]`);
-    const missing=[!picker1Attr?PICKER_FIELD_1_NAME:null,!picker2Attr?PICKER_FIELD_2_NAME:null,!placesAttr?PLACES_FIELD_NAME:null].filter(Boolean);
-    return json({error:`Поле(-я) не найдены: ${missing.join(", ")}. Реальные названия полей в отгрузке: ${found.join(" | ")||"(пусто)"}`},500);
+  let defs;
+  try{defs=await fetchAttrDefs(auth)}catch(e){return json({error:String(e.message||e)},500)}
+
+  const picker1Def=findAttrDef(defs,PICKER_FIELD_1_NAME);
+  const picker2Def=findAttrDef(defs,PICKER_FIELD_2_NAME);
+  const placesDef=findAttrDef(defs,PLACES_FIELD_NAME);
+  if(!picker1Def||!picker2Def||!placesDef){
+    const found=defs.map(a=>`${a.name} [${a.type}]`);
+    const missing=[!picker1Def?PICKER_FIELD_1_NAME:null,!picker2Def?PICKER_FIELD_2_NAME:null,!placesDef?PLACES_FIELD_NAME:null].filter(Boolean);
+    return json({error:`Поле(-я) не найдены в настройках Отгрузки: ${missing.join(", ")}. Реальные названия полей: ${found.join(" | ")||"(пусто)"}`},500);
   }
 
   const attributes=[];
   try{
-    attributes.push({meta:picker1Attr.meta,value:await resolveAttrValue(picker1Attr,picker1,auth)});
-    if(picker2)attributes.push({meta:picker2Attr.meta,value:await resolveAttrValue(picker2Attr,picker2,auth)});
-    attributes.push({meta:placesAttr.meta,value:await resolveAttrValue(placesAttr,places,auth)});
+    attributes.push({meta:picker1Def.meta,value:await resolveAttrValue(picker1Def,picker1,auth)});
+    if(picker2)attributes.push({meta:picker2Def.meta,value:await resolveAttrValue(picker2Def,picker2,auth)});
+    attributes.push({meta:placesDef.meta,value:await resolveAttrValue(placesDef,places,auth)});
   }catch(e){return json({error:String(e.message||e)},500)}
 
   const payload={
