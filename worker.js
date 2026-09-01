@@ -58,6 +58,31 @@ async function handleFind(url,auth){
   const d=await findDemand(code,auth);if(d.status===401)return json({error:"Неверный логин или пароль"},401);
   return json(d,d.error?502:200);
 }
+async function resolveAttrValue(attr,rawValue,auth){
+  const type=attr.type;
+  if(type==="employee"||type==="counterparty"){
+    const entity=type==="employee"?"employee":"counterparty";
+    const filter=encodeURIComponent(`name=${rawValue}`);
+    const r=await fetch(`${API_BASE}/entity/${entity}?filter=${filter}`,{headers:{Authorization:auth}});
+    if(!r.ok)throw new Error(`Не удалось найти "${rawValue}" в справочнике ${entity==="employee"?"Сотрудники":"Контрагенты"}`);
+    const data=await r.json(),row=data.rows?.[0];
+    if(!row)throw new Error(`Значение "${rawValue}" не найдено в справочнике ${entity==="employee"?"Сотрудники":"Контрагенты"} МойСклад`);
+    return {meta:row.meta};
+  }
+  if(type==="customentity"){
+    const metaR=await fetch(attr.meta.href,{headers:{Authorization:auth}});
+    if(!metaR.ok)throw new Error(`Не удалось получить настройки поля "${attr.name}"`);
+    const metaData=await metaR.json(),ceHref=metaData.customEntityMeta?.href;
+    if(!ceHref)throw new Error(`Не найден справочник для поля "${attr.name}"`);
+    const filter=encodeURIComponent(`name=${rawValue}`);
+    const r=await fetch(`${ceHref}?filter=${filter}`,{headers:{Authorization:auth}});
+    if(!r.ok)throw new Error(`Не удалось найти значение "${rawValue}" в справочнике поля "${attr.name}"`);
+    const data=await r.json(),row=data.rows?.[0];
+    if(!row)throw new Error(`Значение "${rawValue}" не найдено в справочнике поля "${attr.name}". Возможно, его нужно сначала добавить в МойСклад.`);
+    return {meta:row.meta};
+  }
+  return rawValue;
+}
 async function handleCollect(req,auth){
   const body=await req.json(),id=String(body.id||"").trim(),picker1=String(body.picker1||"").trim(),picker2=String(body.picker2||"").trim(),places=Number(body.places);
   if(!id)return json({error:"Не передан id отгрузки"},400);
@@ -81,17 +106,22 @@ async function handleCollect(req,auth){
   const picker1Attr=getAttrObject(d,PICKER_FIELD_1_NAME);
   const picker2Attr=getAttrObject(d,PICKER_FIELD_2_NAME);
   const placesAttr=getAttrObject(d,PLACES_FIELD_NAME);
-  if(!picker1Attr)return json({error:`Поле "${PICKER_FIELD_1_NAME}" не найдено в отгрузке`},500);
-  if(!picker2Attr)return json({error:`Поле "${PICKER_FIELD_2_NAME}" не найдено в отгрузке`},500);
-  if(!placesAttr)return json({error:`Поле "${PLACES_FIELD_NAME}" не найдено в отгрузке`},500);
+  if(!picker1Attr||!picker2Attr||!placesAttr){
+    const found=(Array.isArray(d.attributes)?d.attributes:[]).map(a=>`${a.name} [${a.type}]`);
+    const missing=[!picker1Attr?PICKER_FIELD_1_NAME:null,!picker2Attr?PICKER_FIELD_2_NAME:null,!placesAttr?PLACES_FIELD_NAME:null].filter(Boolean);
+    return json({error:`Поле(-я) не найдены: ${missing.join(", ")}. Реальные названия полей в отгрузке: ${found.join(" | ")||"(пусто)"}`},500);
+  }
+
+  const attributes=[];
+  try{
+    attributes.push({meta:picker1Attr.meta,value:await resolveAttrValue(picker1Attr,picker1,auth)});
+    if(picker2)attributes.push({meta:picker2Attr.meta,value:await resolveAttrValue(picker2Attr,picker2,auth)});
+    attributes.push({meta:placesAttr.meta,value:await resolveAttrValue(placesAttr,places,auth)});
+  }catch(e){return json({error:String(e.message||e)},500)}
 
   const payload={
     state:{meta:{href:state.meta.href,type:"state",mediaType:"application/json"}},
-    attributes:[
-      {meta:picker1Attr.meta,value:picker1},
-      {meta:picker2Attr.meta,value:picker2||""},
-      {meta:placesAttr.meta,value:places}
-    ]
+    attributes
   };
   const put=await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`,{
     method:"PUT",headers:{Authorization:auth,"Content-Type":"application/json"},body:JSON.stringify(payload)
