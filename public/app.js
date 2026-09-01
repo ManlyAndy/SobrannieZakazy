@@ -89,15 +89,19 @@ function renderNotFound(code){
 function renderWrongStatus(d){
   $("result-body").innerHTML=`<div class="card bad"><div class="badge bad">НЕ ГОТОВО</div><div class="num">№ ${esc(d.name)}</div><div class="meta">Покупатель: <b>${esc(d.agentName)}</b></div><div class="meta">Текущий статус: <b>${esc(d.stateName||"—")}</b></div><p class="meta">Для этого приложения допустимы статусы «${esc(CONFIG.STATUS_NOT_COLLECTED_NAME)}» и «${esc(CONFIG.STATUS_URGENT_NAME)}».</p></div>`;
 }
+function pickersLabel(p1,p2){
+  if(!p1)return "—";
+  return p2?`${p1}, ${p2}`:p1;
+}
 function renderCollected(d){
-  $("result-body").innerHTML=`<div class="card ok"><div class="badge ok">УЖЕ СОБРАНО ✓</div><div class="num">№ ${esc(d.name)}</div><div class="meta">Покупатель: <b>${esc(d.agentName)}</b></div><div class="meta">Сборщик: <b>${esc(d.pickerName||"—")}</b></div><div class="meta">Количество мест: <b>${esc(d.places==null?"—":d.places)}</b></div></div>`;
+  $("result-body").innerHTML=`<div class="card ok"><div class="badge ok">УЖЕ СОБРАНО ✓</div><div class="num">№ ${esc(d.name)}</div><div class="meta">Покупатель: <b>${esc(d.agentName)}</b></div><div class="meta">Сборщик(и): <b>${esc(pickersLabel(d.pickerName1,d.pickerName2))}</b></div><div class="meta">Количество мест: <b>${esc(d.places==null?"—":d.places)}</b></div></div>`;
 }
-function pickerChips(selected){
-  return CONFIG.PICKER_NAMES.map(n=>`<button type="button" class="chip${n===selected?" chip-active":""}" onclick="selectPicker('${esc(n).replace(/'/g,"\\'")}')">${esc(n)}</button>`).join("");
+function pickerChips(selected,targetId){
+  return CONFIG.PICKER_NAMES.map(n=>`<button type="button" class="chip${n===selected?" chip-active":""}" onclick="selectPicker('${esc(n).replace(/'/g,"\\'")}','${targetId}')">${esc(n)}</button>`).join("");
 }
-function selectPicker(name){
-  $("picker-input").value=name;
-  document.querySelectorAll("#picker-chips .chip").forEach(c=>c.classList.toggle("chip-active",c.textContent===name));
+function selectPicker(name,targetId){
+  $(targetId).value=name;
+  document.querySelectorAll(`#${targetId}-chips .chip`).forEach(c=>c.classList.toggle("chip-active",c.textContent===name));
 }
 function renderOrder(d){
   $("result-body").innerHTML=`
@@ -114,10 +118,13 @@ function renderOrder(d){
 function openCollectModal(){
   $("order-content").innerHTML=`
     <div class="num">№ ${esc(currentOrder.name)}</div>
-    <p class="meta">Выберите сборщика и укажите количество мест.</p>
-    <label class="hint">Имя Сборщика</label>
-    <input id="picker-input" type="text" placeholder="Впишите имя или выберите ниже" value="${currentOrder.pickerName?esc(currentOrder.pickerName):""}" autocomplete="off">
-    <div id="picker-chips" class="chips">${pickerChips(currentOrder.pickerName)}</div>
+    <p class="meta">Выберите сборщика(ов) и укажите количество мест.</p>
+    <label class="hint">Сборщик №1</label>
+    <input id="picker-input-1" type="text" placeholder="Впишите имя или выберите ниже" value="${currentOrder.pickerName1?esc(currentOrder.pickerName1):""}" autocomplete="off">
+    <div id="picker-input-1-chips" class="chips">${pickerChips(currentOrder.pickerName1,"picker-input-1")}</div>
+    <label class="hint">Сборщик №2 (если собирали вдвоём — необязательно)</label>
+    <input id="picker-input-2" type="text" placeholder="Впишите имя или выберите ниже" value="${currentOrder.pickerName2?esc(currentOrder.pickerName2):""}" autocomplete="off">
+    <div id="picker-input-2-chips" class="chips">${pickerChips(currentOrder.pickerName2,"picker-input-2")}</div>
     <label class="hint">Количество мест</label>
     <input id="places-input" type="number" min="1" step="1" inputmode="numeric" value="${currentOrder.places==null?"":esc(currentOrder.places)}" placeholder="Количество мест">
     <button class="btn-success" onclick="collectOrder()">Сменить статус</button>`;
@@ -126,43 +133,48 @@ function openCollectModal(){
 function closeOrderModal(){$("order-modal").classList.remove("active")}
 
 async function collectOrder(){
-  const picker=$("picker-input").value.trim();
+  const picker1=$("picker-input-1").value.trim();
+  const picker2=$("picker-input-2").value.trim();
   const places=Number($("places-input").value);
-  if(!picker){alert("Впишите имя сборщика");return}
+  if(!picker1){alert("Впишите имя сборщика №1");return}
   if(!Number.isInteger(places)||places<1){alert("Укажите количество мест");return}
   const btn=document.querySelector("#order-content .btn-success");
   btn.disabled=true;btn.textContent="Сохраняю…";
   try{
     const r=await fetch(`${CONFIG.PROXY_URL}/collect`,{
       method:"POST",headers:{"Authorization":auth(),"Content-Type":"application/json"},
-      body:JSON.stringify({id:currentOrder.id,pickerName:picker,places})
+      body:JSON.stringify({id:currentOrder.id,picker1,picker2,places})
     });
     if(r.status===401){logout();return}
     const d=await r.json();
     if(!d.ok){alert(d.error||"Не удалось изменить статус");btn.disabled=false;btn.textContent="Сменить статус";return}
     currentOrder.stateName=CONFIG.STATUS_COLLECTED_NAME;
     currentOrder.alreadyCollected=true;
-    currentOrder.pickerName=picker;currentOrder.places=places;
+    currentOrder.pickerName1=picker1;currentOrder.pickerName2=picker2||null;currentOrder.places=places;
     closeOrderModal();
-    $("result-body").innerHTML=`<div class="card ok"><div class="badge ok">СОБРАНО ✓</div><div class="num">№ ${esc(currentOrder.name)}</div><div class="meta">Сборщик: <b>${esc(picker)}</b></div><div class="meta">Количество мест: <b>${places}</b></div><p class="meta">Статус успешно изменён в МойСклад.</p></div><button class="btn-secondary" onclick="openPhotoModal()">Сделать фото</button>`;
+    $("result-body").innerHTML=`<div class="card ok"><div class="badge ok">СОБРАНО ✓</div><div class="num">№ ${esc(currentOrder.name)}</div><div class="meta">Сборщик(и): <b>${esc(pickersLabel(picker1,picker2))}</b></div><div class="meta">Количество мест: <b>${places}</b></div><p class="meta">Статус успешно изменён в МойСклад.</p></div><button class="btn-secondary" onclick="openPhotoModal()">Сделать фото</button>`;
   }catch(e){alert("Нет соединения с сервером")}
   finally{btn.disabled=false;btn.textContent="Сменить статус"}
 }
 
+let lastPhotoSource="gallery";
 function openPhotoModal(){
   if(!currentOrder)return;
   photoFiles=[];
   $("photo-title").textContent=`Фото отгрузки № ${currentOrder.name}`;
   $("photo-status").textContent="";
-  $("photo-input").value="";
+  $("photo-input-camera").value="";
+  $("photo-input-gallery").value="";
   renderPhotoGrid();
   $("photo-modal").classList.add("active");
 }
 function closePhotoModal(){$("photo-modal").classList.remove("active")}
-function addAnotherPhoto(){$("photo-input").click()}
+function openCamera(){lastPhotoSource="camera";$("photo-input-camera").click()}
+function openGallery(){lastPhotoSource="gallery";$("photo-input-gallery").click()}
+function addAnotherPhoto(){lastPhotoSource==="camera"?$("photo-input-camera").click():$("photo-input-gallery").click()}
 function handlePhotoFiles(files){
   [...files].forEach(f=>{if(f.type.startsWith("image/"))photoFiles.push(f)});
-  $("photo-input").value="";renderPhotoGrid();
+  $("photo-input-camera").value="";$("photo-input-gallery").value="";renderPhotoGrid();
 }
 function renderPhotoGrid(){
   const grid=$("photo-grid");
@@ -204,7 +216,7 @@ async function uploadPhotos(){
     }
     const r=await fetch(`${CONFIG.PROXY_URL}/photo/upload`,{
       method:"POST",headers:{"Authorization":auth(),"Content-Type":"application/json"},
-      body:JSON.stringify({number:currentOrder.name,photos})
+      body:JSON.stringify({number:currentOrder.name,photos,by:user()})
     });
     if(r.status===401){logout();return}
     const d=await r.json();
@@ -220,4 +232,3 @@ window.addEventListener("load",()=>{
   if(auth()&&day===businessDayKey())enterScan();
   else logout();
 });
-
