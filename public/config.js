@@ -6,7 +6,8 @@ const CONFIG = {
   STATUS_COLLECTED_NAME: "Собрано",
 
   PLACES_FIELD_NAME: "Количество мест",
-  PICKER_FIELD_NAME: "Имя Сборщика",
+  PICKER_FIELD_1_NAME: "Сборщик №1",
+  PICKER_FIELD_2_NAME: "Сборщик №2",
 
   PICKER_NAMES: [
      "Шмаков",
@@ -22,4 +23,3 @@ const CONFIG = {
     "Харунин"
   ]
 };
-
