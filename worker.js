@@ -76,15 +76,16 @@ async function resolveAttrValue(attr,rawValue,auth){
     return {meta:row.meta};
   }
   if(type==="customentity"){
-    const ceHref=attr.customEntityMeta?.href;
-    if(!ceHref)throw new Error(`Не найден справочник для поля "${attr.name}" (type=${type})`);
-    const sep=ceHref.includes("?")?"&":"?";
-    const r=await fetch(`${ceHref}${sep}limit=1000`,{headers:{Authorization:auth}});
+    const ceMetaHref=attr.customEntityMeta?.href;
+    if(!ceMetaHref)throw new Error(`Не найден справочник для поля "${attr.name}" (type=${type})`);
+    const ceId=ceMetaHref.split("/").filter(Boolean).pop();
+    const ceHref=`${API_BASE}/entity/customentity/${ceId}`;
+    const r=await fetch(`${ceHref}?limit=1000`,{headers:{Authorization:auth}});
     if(!r.ok){let t="";try{t=await r.text()}catch(e){}throw new Error(`Не удалось получить справочник поля "${attr.name}" (HTTP ${r.status}, ${ceHref}): ${t.slice(0,200)}`)}
     const data=await r.json(),rows=Array.isArray(data.rows)?data.rows:[];
     const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
     const row=rows.find(x=>norm(x.name)===norm(rawValue));
-    if(!row)throw new Error(`Значение "${rawValue}" не найдено в справочнике поля "${attr.name}" (${ceHref}, всего строк: ${rows.length}, meta.size=${data.meta?.size}). Есть в МойСклад: ${rows.map(x=>x.name).join(" | ")||"(пусто)"}`);
+    if(!row)throw new Error(`Значение "${rawValue}" не найдено в справочнике поля "${attr.name}" (${ceHref}, всего строк: ${rows.length}). Есть в МойСклад: ${rows.map(x=>x.name).join(" | ")||"(пусто)"}`);
     return {meta:row.meta};
   }
   return rawValue;
