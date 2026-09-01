@@ -3,7 +3,8 @@ const STATUS_NOT_COLLECTED_NAME="Не собрано";
 const STATUS_URGENT_NAME="Срочнее некуда";
 const STATUS_COLLECTED_NAME="Собрано";
 const PLACES_FIELD_NAME="Количество мест";
-const PICKER_FIELD_NAME="Имя Сборщика";
+const PICKER_FIELD_1_NAME="Сборщик №1";
+const PICKER_FIELD_2_NAME="Сборщик №2";
 const BITRIX_CHAT_ID=11359;
 const BITRIX_DIALOG_ID=`chat${BITRIX_CHAT_ID}`;
 const ALLOWED_ORIGIN="*";
@@ -40,9 +41,10 @@ async function findDemand(code,auth){
   if(!detailR.ok)return {error:"Не удалось получить данные отгрузки",status:detailR.status};
   const d=await detailR.json(),stateName=d.state?.name||null;
   const places=getAttr(d,PLACES_FIELD_NAME);
-  const picker=getAttr(d,PICKER_FIELD_NAME);
+  const picker1=getAttr(d,PICKER_FIELD_1_NAME);
+  const picker2=getAttr(d,PICKER_FIELD_2_NAME);
   return {found:true,id:d.id,name:d.name,agentName:d.agent?.name||"—",sum:d.sum?(d.sum/100).toFixed(2):"—",
-    positionsCount:d.positions?.meta?.size??"—",places,pickerName:picker,stateName,
+    positionsCount:d.positions?.meta?.size??"—",places,pickerName1:picker1,pickerName2:picker2,stateName,
     collectable:stateName===STATUS_NOT_COLLECTED_NAME||stateName===STATUS_URGENT_NAME,
     alreadyCollected:stateName===STATUS_COLLECTED_NAME};
 }
@@ -57,9 +59,9 @@ async function handleFind(url,auth){
   return json(d,d.error?502:200);
 }
 async function handleCollect(req,auth){
-  const body=await req.json(),id=String(body.id||"").trim(),picker=String(body.pickerName||"").trim(),places=Number(body.places);
+  const body=await req.json(),id=String(body.id||"").trim(),picker1=String(body.picker1||"").trim(),picker2=String(body.picker2||"").trim(),places=Number(body.places);
   if(!id)return json({error:"Не передан id отгрузки"},400);
-  if(!picker)return json({error:"Не выбран сборщик"},400);
+  if(!picker1)return json({error:"Не выбран сборщик"},400);
   if(!Number.isInteger(places)||places<1)return json({error:"Количество мест должно быть целым числом больше нуля"},400);
 
   const r=await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state,attributes`,{headers:{Authorization:auth},cf:{cacheTtl:0,cacheEverything:false}});
@@ -76,15 +78,18 @@ async function handleCollect(req,auth){
   const state=(meta.states||[]).find(s=>s.name===STATUS_COLLECTED_NAME);
   if(!state)return json({error:`Статус "${STATUS_COLLECTED_NAME}" не найден в МойСклад`},500);
 
-  const pickerAttr=getAttrObject(d,PICKER_FIELD_NAME);
+  const picker1Attr=getAttrObject(d,PICKER_FIELD_1_NAME);
+  const picker2Attr=getAttrObject(d,PICKER_FIELD_2_NAME);
   const placesAttr=getAttrObject(d,PLACES_FIELD_NAME);
-  if(!pickerAttr)return json({error:`Поле "${PICKER_FIELD_NAME}" не найдено в отгрузке`},500);
+  if(!picker1Attr)return json({error:`Поле "${PICKER_FIELD_1_NAME}" не найдено в отгрузке`},500);
+  if(!picker2Attr)return json({error:`Поле "${PICKER_FIELD_2_NAME}" не найдено в отгрузке`},500);
   if(!placesAttr)return json({error:`Поле "${PLACES_FIELD_NAME}" не найдено в отгрузке`},500);
 
   const payload={
     state:{meta:{href:state.meta.href,type:"state",mediaType:"application/json"}},
     attributes:[
-      {meta:pickerAttr.meta,value:picker},
+      {meta:picker1Attr.meta,value:picker1},
+      {meta:picker2Attr.meta,value:picker2||""},
       {meta:placesAttr.meta,value:places}
     ]
   };
@@ -96,7 +101,7 @@ async function handleCollect(req,auth){
 
   const verify=await findDemand(d.name,auth);
   if(verify.stateName!==STATUS_COLLECTED_NAME)return json({error:"Данные сохранены, но статус не подтвердился при проверке"},502);
-  return json({ok:true,name:d.name,places,pickerName:picker,stateName:STATUS_COLLECTED_NAME});
+  return json({ok:true,name:d.name,places,pickerName1:picker1,pickerName2:picker2||null,stateName:STATUS_COLLECTED_NAME});
 }
 
 async function bitrixCall(webhook,method,payload){
@@ -108,12 +113,13 @@ async function bitrixCall(webhook,method,payload){
 async function handlePhotoUpload(req,auth,env){
   if(!env.BITRIX_WEBHOOK_URL)return json({error:"Интеграция с Bitrix24 не настроена"},500);
   if(!(await verifyAuth(auth)))return json({error:"Неверный логин или пароль"},401);
-  const body=await req.json(),number=String(body.number||"").trim(),photos=Array.isArray(body.photos)?body.photos:[];
+  const body=await req.json(),number=String(body.number||"").trim(),photos=Array.isArray(body.photos)?body.photos:[],by=String(body.by||"").trim();
   if(!number)return json({error:"Не передан номер отгрузки"},400);
   if(!photos.length)return json({error:"Нет фотографий"},400);
   if(photos.length>10)return json({error:"За один раз можно загрузить максимум 10 фото"},400);
 
   const webhook=env.BITRIX_WEBHOOK_URL.replace(/\/$/,"");
+  const caption=`Отгрузка № ${number}${by?` (загрузил: ${by})`:""}`;
   let uploaded=0;const results=[];
   for(let i=0;i<photos.length;i++){
     const p=photos[i];
@@ -121,7 +127,7 @@ async function handlePhotoUpload(req,auth,env){
     const name=String(p.name||`order-${number}-${i+1}.jpg`).replace(/[^a-zA-Z0-9А-Яа-я._-]/g,"_");
     const data=await bitrixCall(webhook,"im.v2.File.upload",{
       dialogId:BITRIX_DIALOG_ID,
-      fields:{name,content:p.content,message:`Отгрузка № ${number}`}
+      fields:{name,content:p.content,message:caption}
     });
     uploaded++;results.push({name,result:data.result});
   }
