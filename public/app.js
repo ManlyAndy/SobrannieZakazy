@@ -220,3 +220,4 @@ window.addEventListener("load",()=>{
   if(auth()&&day===businessDayKey())enterScan();
   else logout();
 });
+
