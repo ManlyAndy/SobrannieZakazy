@@ -92,8 +92,12 @@ function renderWrongStatus(d){
 function renderCollected(d){
   $("result-body").innerHTML=`<div class="card ok"><div class="badge ok">УЖЕ СОБРАНО ✓</div><div class="num">№ ${esc(d.name)}</div><div class="meta">Покупатель: <b>${esc(d.agentName)}</b></div><div class="meta">Сборщик: <b>${esc(d.pickerName||"—")}</b></div><div class="meta">Количество мест: <b>${esc(d.places==null?"—":d.places)}</b></div></div>`;
 }
-function pickerOptions(selected){
-  return CONFIG.PICKER_NAMES.map(n=>`<option ${n===selected?"selected":""} value="${esc(n)}">${esc(n)}</option>`).join("");
+function pickerChips(selected){
+  return CONFIG.PICKER_NAMES.map(n=>`<button type="button" class="chip${n===selected?" chip-active":""}" onclick="selectPicker('${esc(n).replace(/'/g,"\\'")}')">${esc(n)}</button>`).join("");
+}
+function selectPicker(name){
+  $("picker-input").value=name;
+  document.querySelectorAll("#picker-chips .chip").forEach(c=>c.classList.toggle("chip-active",c.textContent===name));
 }
 function renderOrder(d){
   $("result-body").innerHTML=`
@@ -112,7 +116,8 @@ function openCollectModal(){
     <div class="num">№ ${esc(currentOrder.name)}</div>
     <p class="meta">Выберите сборщика и укажите количество мест.</p>
     <label class="hint">Имя Сборщика</label>
-    <select id="picker-select">${pickerOptions(currentOrder.pickerName)}</select>
+    <input id="picker-input" type="text" placeholder="Впишите имя или выберите ниже" value="${currentOrder.pickerName?esc(currentOrder.pickerName):""}" autocomplete="off">
+    <div id="picker-chips" class="chips">${pickerChips(currentOrder.pickerName)}</div>
     <label class="hint">Количество мест</label>
     <input id="places-input" type="number" min="1" step="1" inputmode="numeric" value="${currentOrder.places==null?"":esc(currentOrder.places)}" placeholder="Количество мест">
     <button class="btn-success" onclick="collectOrder()">Сменить статус</button>`;
@@ -121,9 +126,9 @@ function openCollectModal(){
 function closeOrderModal(){$("order-modal").classList.remove("active")}
 
 async function collectOrder(){
-  const picker=$("picker-select").value;
+  const picker=$("picker-input").value.trim();
   const places=Number($("places-input").value);
-  if(!picker){alert("Выберите сборщика");return}
+  if(!picker){alert("Впишите имя сборщика");return}
   if(!Number.isInteger(places)||places<1){alert("Укажите количество мест");return}
   const btn=document.querySelector("#order-content .btn-success");
   btn.disabled=true;btn.textContent="Сохраняю…";
@@ -215,4 +220,3 @@ window.addEventListener("load",()=>{
   if(auth()&&day===businessDayKey())enterScan();
   else logout();
 });
-
