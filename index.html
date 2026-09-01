@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#111827">
+<title>Собранные заказы</title>
+<link rel="manifest" href="manifest.json">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#111827;color:#f3f4f6;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;min-height:100vh}
+.screen{display:none;min-height:100vh;padding:18px;max-width:520px;margin:auto}
+.screen.active{display:flex;flex-direction:column}
+h1{font-size:22px;margin:0 0 18px}
+input,select{width:100%;padding:14px;border-radius:11px;border:1px solid #374151;background:#1f2937;color:#f3f4f6;font-size:16px;margin-bottom:10px}
+button{width:100%;padding:15px;border:0;border-radius:11px;font-size:16px;font-weight:700;margin-bottom:10px}
+.btn-primary{background:#2563eb;color:#fff}.btn-success{background:#16a34a;color:#fff}.btn-secondary{background:#374151;color:#fff}.btn-danger{background:#dc2626;color:#fff}
+.link-btn{background:none;color:#93c5fd;padding:5px;width:auto;text-decoration:underline;font-size:13px}
+.topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.who{font-size:13px;color:#9ca3af}
+.card{background:#1f2937;border-radius:15px;padding:18px;margin-bottom:14px}
+.card.ok{border:2px solid #16a34a}.card.bad{border:2px solid #dc2626}
+.badge{display:inline-block;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:800;margin-bottom:10px}
+.badge.ok{background:#14532d;color:#86efac}.badge.bad{background:#7f1d1d;color:#fca5a5}
+.num{font-size:25px;font-weight:800;margin-bottom:8px}.meta{font-size:14px;color:#d1d5db;margin:5px 0}.meta b{color:#fff}
+.hint{font-size:13px;color:#9ca3af}.error{color:#fca5a5;font-size:14px}
+#reader{height:300px;background:#000;border-radius:14px;overflow:hidden;margin-bottom:12px}
+#reader video{width:100%!important;height:300px!important;object-fit:cover!important}
+.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:20;align-items:flex-end}
+.modal.active{display:flex}.modal-box{width:100%;max-width:520px;margin:auto;background:#1f2937;border-radius:18px 18px 0 0;padding:18px;max-height:90vh;overflow:auto}
+.modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;font-weight:800}
+.photo-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:10px 0}
+.photo-item{position:relative}.photo-item img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px}
+.photo-remove{position:absolute;right:5px;top:5px;width:34px;height:34px;padding:0;margin:0;border-radius:50%}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.actions button{margin:0}
+.hidden{display:none!important}
+.spinner{width:30px;height:30px;border:3px solid #374151;border-top-color:#60a5fa;border-radius:50%;animation:spin .8s linear infinite;margin:24px auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<div id="screen-login" class="screen active">
+  <h1>Собранные заказы</h1>
+  <p class="hint">Вход выполняется обычным логином и паролем МойСклад.</p>
+  <input id="login-user" placeholder="Логин (email)" autocomplete="username">
+  <input id="login-pass" type="password" placeholder="Пароль" autocomplete="current-password">
+  <button class="btn-primary" onclick="doLogin()">Войти</button>
+  <div id="login-error" class="error"></div>
+</div>
+
+<div id="screen-scan" class="screen">
+  <div class="topbar">
+    <span class="who" id="who-label"></span>
+    <button class="link-btn" onclick="logout()">Выйти</button>
+  </div>
+  <h1>Сканируйте отгрузку</h1>
+  <div id="reader"></div>
+  <p class="hint" style="text-align:center">Наведите камеру на штрихкод отгрузки. Допустимые исходные статусы: «Не собрано» и «Срочнее некуда».</p>
+  <button class="btn-secondary" onclick="showManual()">Ввести номер вручную</button>
+  <div id="manual" class="hidden">
+    <input id="manual-code" inputmode="numeric" placeholder="Номер отгрузки">
+    <button class="btn-primary" onclick="manualLookup()">Найти</button>
+  </div>
+</div>
+
+<div id="screen-result" class="screen">
+  <div class="topbar">
+    <span class="who" id="who-label-2"></span>
+    <button class="link-btn" onclick="logout()">Выйти</button>
+  </div>
+  <div id="result-body"></div>
+  <button class="btn-secondary" onclick="backToScan()">← Сканировать следующий</button>
+</div>
+
+<div id="order-modal" class="modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span>Отгрузка</span>
+      <button class="link-btn" onclick="closeOrderModal()">Закрыть</button>
+    </div>
+    <div id="order-content"></div>
+  </div>
+</div>
+
+<div id="photo-modal" class="modal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span id="photo-title">Фото отгрузки</span>
+      <button class="link-btn" onclick="closePhotoModal()">Закрыть</button>
+    </div>
+    <div id="photo-grid" class="photo-grid"></div>
+    <input id="photo-input" class="hidden" type="file" accept="image/*" capture="environment" multiple onchange="handlePhotoFiles(this.files)">
+    <button class="btn-secondary" onclick="document.getElementById('photo-input').click()">Камера / Галерея</button>
+    <div class="actions">
+      <button class="btn-secondary" onclick="addAnotherPhoto()">Ещё</button>
+      <button class="btn-success" onclick="uploadPhotos()">Загрузить</button>
+    </div>
+    <p id="photo-status" class="hint"></p>
+  </div>
+</div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
