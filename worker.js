@@ -160,5 +160,3 @@ export default {async fetch(request,env){
     return json({error:"Действие не разрешено"},403);
   }catch(e){return json({error:"Внутренняя ошибка",details:String(e)},500)}
 }}
-
-
