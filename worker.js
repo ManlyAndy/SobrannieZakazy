@@ -7,202 +7,29 @@ const PICKER_FIELD_1_NAME="Сборщик №1";
 const PICKER_FIELD_2_NAME="Сборщик №2";
 const BITRIX_CHAT_ID=11359;
 const BITRIX_DIALOG_ID=`chat${BITRIX_CHAT_ID}`;
-const ALLOWED_ORIGIN="*";
-
+const ALLOWED_ORIGIN="https://manlyandy.github.io";
+const SESSION_TTL=28800;
 function corsHeaders(){return{"Access-Control-Allow-Origin":ALLOWED_ORIGIN,"Access-Control-Allow-Headers":"Authorization, Content-Type","Access-Control-Allow-Methods":"GET, POST, OPTIONS"}}
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"Content-Type":"application/json","Cache-Control":"no-store",...corsHeaders()}})}
-async function verifyAuth(auth){
-  const r=await fetch(`${API_BASE}/entity/employee?limit=1`,{headers:{Authorization:auth}});
-  return r.ok;
-}
-function getAttr(row,name){
-  const attrs=Array.isArray(row.attributes)?row.attributes:[];
-  const n=String(name).trim().toLowerCase();
-  const a=attrs.find(x=>String(x.name||"").trim().toLowerCase()===n) ||
-          attrs.find(x=>/количеств.*мест/i.test(String(x.name||"")) && /мест/i.test(name));
-  if(!a)return null;
-  const v=a.value;
-  if(v&&typeof v==="object")return v.name??v.value??null;
-  return v??null;
-}
-async function fetchAttrDefs(auth){
-  const r=await fetch(`${API_BASE}/entity/demand/metadata/attributes`,{headers:{Authorization:auth}});
-  if(!r.ok)throw new Error("Не удалось получить список полей отгрузки");
-  const data=await r.json();
-  return Array.isArray(data.rows)?data.rows:[];
-}
-function findAttrDef(defs,name){
-  const n=String(name).trim().toLowerCase();
-  return defs.find(x=>String(x.name||"").trim().toLowerCase()===n)||null;
-}
-async function findDemand(code,auth){
-  const filter=encodeURIComponent(`name=${code}`);
-  const r=await fetch(`${API_BASE}/entity/demand?filter=${filter}&expand=agent,state,attributes`,{headers:{Authorization:auth},cf:{cacheTtl:0,cacheEverything:false}});
-  if(r.status===401)return {status:401};
-  if(!r.ok)return {error:"Ошибка МойСклад",status:r.status};
-  const data=await r.json(),row=data.rows?.[0];
-  if(!row)return {found:false};
-  const detailR=await fetch(`${API_BASE}/entity/demand/${row.id}?expand=agent,state,attributes`,{headers:{Authorization:auth},cf:{cacheTtl:0,cacheEverything:false}});
-  if(!detailR.ok)return {error:"Не удалось получить данные отгрузки",status:detailR.status};
-  const d=await detailR.json(),stateName=d.state?.name||null;
-  const places=getAttr(d,PLACES_FIELD_NAME);
-  const picker1=getAttr(d,PICKER_FIELD_1_NAME);
-  const picker2=getAttr(d,PICKER_FIELD_2_NAME);
-  return {found:true,id:d.id,name:d.name,agentName:d.agent?.name||"—",sum:d.sum?(d.sum/100).toFixed(2):"—",
-    positionsCount:d.positions?.meta?.size??"—",places,pickerName1:picker1,pickerName2:picker2,stateName,
-    collectable:stateName===STATUS_NOT_COLLECTED_NAME||stateName===STATUS_URGENT_NAME,
-    alreadyCollected:stateName===STATUS_COLLECTED_NAME};
-}
-async function handleFind(url,auth){
-  const code=(url.searchParams.get("code")||"").trim();
-  if(!code)return json({error:"Не передан номер"},400);
-  if(code==="__login_check__"){
-    const ok=await verifyAuth(auth);
-    return ok?json({ok:true}):json({error:"Неверный логин или пароль"},401);
-  }
-  const d=await findDemand(code,auth);if(d.status===401)return json({error:"Неверный логин или пароль"},401);
-  return json(d,d.error?502:200);
-}
-async function resolveAttrValue(attr,rawValue,auth){
-  const type=attr.type;
-  if(type==="employee"||type==="counterparty"){
-    const entity=type==="employee"?"employee":"counterparty";
-    const r=await fetch(`${API_BASE}/entity/${entity}?limit=1000`,{headers:{Authorization:auth}});
-    if(!r.ok)throw new Error(`Не удалось получить справочник ${entity==="employee"?"Сотрудники":"Контрагенты"}`);
-    const data=await r.json(),rows=Array.isArray(data.rows)?data.rows:[];
-    const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
-    const row=rows.find(x=>norm(x.name)===norm(rawValue));
-    if(!row)throw new Error(`Значение "${rawValue}" не найдено в справочнике ${entity==="employee"?"Сотрудники":"Контрагенты"}. Есть в МойСклад: ${rows.map(x=>x.name).join(" | ")||"(пусто)"}`);
-    return {meta:row.meta};
-  }
-  if(type==="customentity"){
-    const ceMetaHref=attr.customEntityMeta?.href;
-    if(!ceMetaHref)throw new Error(`Не найден справочник для поля "${attr.name}" (type=${type})`);
-    const ceId=ceMetaHref.split("/").filter(Boolean).pop();
-    const ceHref=`${API_BASE}/entity/customentity/${ceId}`;
-    const r=await fetch(`${ceHref}?limit=1000`,{headers:{Authorization:auth}});
-    if(!r.ok){let t="";try{t=await r.text()}catch(e){}throw new Error(`Не удалось получить справочник поля "${attr.name}" (HTTP ${r.status}, ${ceHref}): ${t.slice(0,200)}`)}
-    const data=await r.json(),rows=Array.isArray(data.rows)?data.rows:[];
-    const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
-    const row=rows.find(x=>norm(x.name)===norm(rawValue));
-    if(!row)throw new Error(`Значение "${rawValue}" не найдено в справочнике поля "${attr.name}" (${ceHref}, всего строк: ${rows.length}). Есть в МойСклад: ${rows.map(x=>x.name).join(" | ")||"(пусто)"}`);
-    return {meta:row.meta};
-  }
-  return rawValue;
-}
-async function handleCollect(req,auth){
-  const body=await req.json(),id=String(body.id||"").trim(),picker1=String(body.picker1||"").trim(),picker2=String(body.picker2||"").trim(),places=Number(body.places);
-  if(!id)return json({error:"Не передан id отгрузки"},400);
-  if(!picker1)return json({error:"Не выбран сборщик"},400);
-  if(!Number.isInteger(places)||places<1)return json({error:"Количество мест должно быть целым числом больше нуля"},400);
-
-  const r=await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state,attributes`,{headers:{Authorization:auth},cf:{cacheTtl:0,cacheEverything:false}});
-  if(r.status===401)return json({error:"Неверный логин или пароль"},401);
-  if(!r.ok)return json({error:"Не удалось проверить отгрузку"},502);
-  const d=await r.json(),current=d.state?.name||null;
-  if(current===STATUS_COLLECTED_NAME)return json({ok:true,alreadyCollected:true});
-  if(current!==STATUS_NOT_COLLECTED_NAME&&current!==STATUS_URGENT_NAME)
-    return json({error:`Статус уже изменился: сейчас "${current||"—"}"`},409);
-
-  const stateMetaR=await fetch(`${API_BASE}/entity/demand/metadata`,{headers:{Authorization:auth}});
-  if(!stateMetaR.ok)return json({error:"Не удалось получить статусы"},502);
-  const meta=await stateMetaR.json();
-  const state=(meta.states||[]).find(s=>s.name===STATUS_COLLECTED_NAME);
-  if(!state)return json({error:`Статус "${STATUS_COLLECTED_NAME}" не найден в МойСклад`},500);
-
-  let defs;
-  try{defs=await fetchAttrDefs(auth)}catch(e){return json({error:String(e.message||e)},500)}
-
-  const picker1Def=findAttrDef(defs,PICKER_FIELD_1_NAME);
-  const picker2Def=findAttrDef(defs,PICKER_FIELD_2_NAME);
-  const placesDef=findAttrDef(defs,PLACES_FIELD_NAME);
-  if(!picker1Def||!picker2Def||!placesDef){
-    const found=defs.map(a=>`${a.name} [${a.type}]`);
-    const missing=[!picker1Def?PICKER_FIELD_1_NAME:null,!picker2Def?PICKER_FIELD_2_NAME:null,!placesDef?PLACES_FIELD_NAME:null].filter(Boolean);
-    return json({error:`Поле(-я) не найдены в настройках Отгрузки: ${missing.join(", ")}. Реальные названия полей: ${found.join(" | ")||"(пусто)"}`},500);
-  }
-
-  const attributes=[];
-  try{
-    attributes.push({meta:picker1Def.meta,value:await resolveAttrValue(picker1Def,picker1,auth)});
-    if(picker2)attributes.push({meta:picker2Def.meta,value:await resolveAttrValue(picker2Def,picker2,auth)});
-    attributes.push({meta:placesDef.meta,value:await resolveAttrValue(placesDef,places,auth)});
-  }catch(e){return json({error:String(e.message||e)},500)}
-
-  const payload={
-    state:{meta:{href:state.meta.href,type:"state",mediaType:"application/json"}},
-    attributes
-  };
-  const put=await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`,{
-    method:"PUT",headers:{Authorization:auth,"Content-Type":"application/json"},body:JSON.stringify(payload)
-  });
-  if(put.status===401)return json({error:"Неверный логин или пароль"},401);
-  if(!put.ok){let details="";try{details=await put.text()}catch(e){}return json({error:"Не удалось сохранить статус и данные сборки",status:put.status,details},502)}
-
-  const verify=await findDemand(d.name,auth);
-  if(verify.stateName!==STATUS_COLLECTED_NAME)return json({error:"Данные сохранены, но статус не подтвердился при проверке"},502);
-  return json({ok:true,name:d.name,places,pickerName1:picker1,pickerName2:picker2||null,stateName:STATUS_COLLECTED_NAME});
-}
-
-async function bitrixCall(webhook,method,payload){
-  const r=await fetch(`${webhook}/${method}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-  const data=await r.json().catch(()=>({}));
-  if(!r.ok||data.error)throw new Error(data.error_description||data.error||`Bitrix ${r.status}`);
-  return data;
-}
-async function handlePhotoUpload(req,auth,env){
-  if(!env.BITRIX_WEBHOOK_URL)return json({error:"Интеграция с Bitrix24 не настроена"},500);
-  if(!(await verifyAuth(auth)))return json({error:"Неверный логин или пароль"},401);
-  const body=await req.json(),number=String(body.number||"").trim(),photos=Array.isArray(body.photos)?body.photos:[],by=String(body.by||"").trim();
-  if(!number)return json({error:"Не передан номер отгрузки"},400);
-  if(!photos.length)return json({error:"Нет фотографий"},400);
-  if(photos.length>10)return json({error:"За один раз можно загрузить максимум 10 фото"},400);
-
-  const webhook=env.BITRIX_WEBHOOK_URL.replace(/\/$/,"");
-  const caption=`Отгрузка № ${number}${by?` (загрузил: ${by})`:""}`;
-  let uploaded=0;const results=[];
-  for(let i=0;i<photos.length;i++){
-    const p=photos[i];
-    if(!p?.content)continue;
-    const name=String(p.name||`order-${number}-${i+1}.jpg`).replace(/[^a-zA-Z0-9А-Яа-я._-]/g,"_");
-    const data=await bitrixCall(webhook,"im.v2.File.upload",{
-      dialogId:BITRIX_DIALOG_ID,
-      fields:{name,content:p.content,message:caption}
-    });
-    uploaded++;results.push({name,result:data.result});
-  }
-  return json({ok:true,number,uploaded,results});
-}
-
-async function handleBitrixTest(auth,env){
-  if(!env.BITRIX_WEBHOOK_URL)return json({ok:false,error:"BITRIX_WEBHOOK_URL не задан в Cloudflare Worker"},500);
-  if(!(await verifyAuth(auth)))return json({ok:false,error:"Неверный логин или пароль"},401);
-  const webhook=env.BITRIX_WEBHOOK_URL.replace(/\/$/,"");
-  try{
-    const data=await bitrixCall(webhook,"im.dialog.get",{DIALOG_ID:BITRIX_DIALOG_ID});
-    return json({ok:true,chatId:BITRIX_CHAT_ID,dialogId:BITRIX_DIALOG_ID,chat:data.result||null,message:"Вебхук имеет доступ к чату. Загрузка через im.v2.File.upload должна выполняться от имени пользователя-владельца вебхука при наличии доступа к этому чату."});
-  }catch(e){
-    return json({ok:false,chatId:BITRIX_CHAT_ID,dialogId:BITRIX_DIALOG_ID,error:String(e)},502);
-  }
-}
-
-export default {async fetch(request,env){
-  const url=new URL(request.url);
-  if(request.method==="OPTIONS")return new Response(null,{headers:corsHeaders()});
-
-  const isApi = url.pathname==="/find" || url.pathname==="/collect" ||
-    url.pathname==="/photo/upload" || url.pathname==="/bitrix/test";
-
-  // Все не-API запросы обслуживает папка public через Workers Static Assets.
-  if(!isApi) return env.ASSETS.fetch(request);
-
-  const auth=request.headers.get("Authorization");
-  if(!auth?.startsWith("Basic "))return json({error:"Нет авторизации"},401);
-  try{
-    if(url.pathname==="/find"&&request.method==="GET")return await handleFind(url,auth);
-    if(url.pathname==="/collect"&&request.method==="POST")return await handleCollect(request,auth);
-    if(url.pathname==="/photo/upload"&&request.method==="POST")return await handlePhotoUpload(request,auth,env);
-    if(url.pathname==="/bitrix/test"&&request.method==="GET")return await handleBitrixTest(auth,env);
-    return json({error:"Действие не разрешено"},403);
-  }catch(e){return json({error:"Внутренняя ошибка",details:String(e)},500)}
-}}
+async function verifyAuth(auth){if(!auth?.startsWith("Basic "))return false;const r=await fetch(`${API_BASE}/entity/employee?limit=1`,{headers:{Authorization:auth}});return r.ok}
+async function createSession(auth,env){if(!env.ROUTES)return null;const bytes=new Uint8Array(32);crypto.getRandomValues(bytes);const token=Array.from(bytes,b=>b.toString(16).padStart(2,"0")).join("");await env.ROUTES.put(`session:${token}`,auth,{expirationTtl:SESSION_TTL});return token}
+function getSessionToken(request){const value=request.headers.get("Authorization")||"";if(!value.startsWith("Bearer "))return null;const token=value.slice(7).trim();return token||null}
+async function getSessionAuth(request,env){const token=getSessionToken(request);if(!token||!env.ROUTES)return null;return await env.ROUTES.get(`session:${token}`)}
+async function markFound(token,id,name,env){if(!token||!env.ROUTES||!id)return;const ttl=SESSION_TTL;await Promise.all([env.ROUTES.put(`session-order:${token}:${id}`,String(name||""),{expirationTtl:ttl}),env.ROUTES.put(`session-order-name:${token}:${String(name||"")}`,String(id),{expirationTtl:ttl})])}
+async function wasFound(token,id,env){if(!token||!env.ROUTES||!id)return false;return !!(await env.ROUTES.get(`session-order:${token}:${id}`))}
+async function wasFoundByName(token,name,env){if(!token||!env.ROUTES||!name)return false;return !!(await env.ROUTES.get(`session-order-name:${token}:${String(name)}`))}
+function unauthorized(){return json({error:"Сессия недействительна или истекла"},401)}
+function getAttr(row,name){const attrs=Array.isArray(row.attributes)?row.attributes:[];const n=String(name).trim().toLowerCase();const a=attrs.find(x=>String(x.name||"").trim().toLowerCase()===n)||attrs.find(x=>/количеств.*мест/i.test(String(x.name||""))&&/мест/i.test(name));if(!a)return null;const v=a.value;if(v&&typeof v==="object")return v.name??v.value??null;return v??null}
+async function fetchAttrDefs(auth){const r=await fetch(`${API_BASE}/entity/demand/metadata/attributes`,{headers:{Authorization:auth}});if(!r.ok)throw new Error("Не удалось получить список полей отгрузки");const data=await r.json();return Array.isArray(data.rows)?data.rows:[]}
+function findAttrDef(defs,name){const n=String(name).trim().toLowerCase();return defs.find(x=>String(x.name||"").trim().toLowerCase()===n)||null}
+async function findDemand(code,auth){const filter=encodeURIComponent(`name=${code}`);const r=await fetch(`${API_BASE}/entity/demand?filter=${filter}&expand=agent,state,attributes`,{headers:{Authorization:auth},cf:{cacheTtl:0,cacheEverything:false}});if(r.status===401)return{status:401};if(!r.ok)return{error:"Ошибка МойСклад",status:r.status};const data=await r.json(),row=data.rows?.[0];if(!row)return{found:false};const detailR=await fetch(`${API_BASE}/entity/demand/${row.id}?expand=agent,state,attributes`,{headers:{Authorization:auth},cf:{cacheTtl:0,cacheEverything:false}});if(!detailR.ok)return{error:"Не удалось получить данные отгрузки",status:detailR.status};const d=await detailR.json(),stateName=d.state?.name||null;const places=getAttr(d,PLACES_FIELD_NAME),picker1=getAttr(d,PICKER_FIELD_1_NAME),picker2=getAttr(d,PICKER_FIELD_2_NAME);return{found:true,id:d.id,name:d.name,agentName:d.agent?.name||"—",sum:d.sum?(d.sum/100).toFixed(2):"—",positionsCount:d.positions?.meta?.size??"—",places,pickerName1:picker1,pickerName2:picker2,stateName,collectable:stateName===STATUS_NOT_COLLECTED_NAME||stateName===STATUS_URGENT_NAME,alreadyCollected:stateName===STATUS_COLLECTED_NAME}}
+async function handleLogin(req,env){const auth=req.headers.get("Authorization")||"";if(!auth.startsWith("Basic "))return unauthorized();if(!(await verifyAuth(auth)))return json({error:"Неверный логин или пароль"},401);const token=await createSession(auth,env);if(!token)return json({error:"Сервер авторизации не настроен"},500);return json({ok:true,token,expiresIn:SESSION_TTL,expiresAt:Date.now()+SESSION_TTL*1000})}
+async function handleFind(url,auth,token,env){const code=(url.searchParams.get("code")||"").trim();if(!code)return json({error:"Не передан номер"},400);const d=await findDemand(code,auth);if(d.status===401)return json({error:"Неверный логин или пароль"},401);if(d.found)await markFound(token,d.id,d.name,env);return json(d,d.error?502:200)}
+async function resolveAttrValue(attr,rawValue,auth){const type=attr.type;if(type==="employee"||type==="counterparty"){const entity=type==="employee"?"employee":"counterparty";const r=await fetch(`${API_BASE}/entity/${entity}?limit=1000`,{headers:{Authorization:auth}});if(!r.ok)throw new Error(`Не удалось получить справочник ${entity==="employee"?"Сотрудники":"Контрагенты"}`);const data=await r.json(),rows=Array.isArray(data.rows)?data.rows:[];const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");const row=rows.find(x=>norm(x.name)===norm(rawValue));if(!row)throw new Error(`Выбранное значение не найдено в справочнике ${entity==="employee"?"Сотрудники":"Контрагенты"}`);return{meta:row.meta}}if(type==="customentity"){const ceMetaHref=attr.customEntityMeta?.href;if(!ceMetaHref)throw new Error(`Не найден справочник для поля "${attr.name}" (type=${type})`);const ceId=ceMetaHref.split("/").filter(Boolean).pop();const ceHref=`${API_BASE}/entity/customentity/${ceId}`;const r=await fetch(`${ceHref}?limit=1000`,{headers:{Authorization:auth}});if(!r.ok){let t="";try{t=await r.text()}catch(e){}throw new Error(`Не удалось получить справочник поля "${attr.name}"`)}const data=await r.json(),rows=Array.isArray(data.rows)?data.rows:[];const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");const row=rows.find(x=>norm(x.name)===norm(rawValue));if(!row)throw new Error(`Выбранное значение не найдено в справочнике поля "${attr.name}"`);return{meta:row.meta}}return rawValue}
+function buildCollectContext(){return null}
+async function prepareCollect(auth,picker1,picker2,places){const stateMetaR=await fetch(`${API_BASE}/entity/demand/metadata`,{headers:{Authorization:auth}});if(!stateMetaR.ok)throw new Error("Не удалось получить статусы");const meta=await stateMetaR.json();const state=(meta.states||[]).find(s=>s.name===STATUS_COLLECTED_NAME);if(!state)throw new Error(`Статус "${STATUS_COLLECTED_NAME}" не найден в МойСклад`);let defs;try{defs=await fetchAttrDefs(auth)}catch(e){throw e}const picker1Def=findAttrDef(defs,PICKER_FIELD_1_NAME),picker2Def=findAttrDef(defs,PICKER_FIELD_2_NAME),placesDef=findAttrDef(defs,PLACES_FIELD_NAME);if(!picker1Def||!picker2Def||!placesDef){throw new Error("Не найдены необходимые поля отгрузки")}const attributes=[];attributes.push({meta:picker1Def.meta,value:await resolveAttrValue(picker1Def,picker1,auth)});if(picker2)attributes.push({meta:picker2Def.meta,value:await resolveAttrValue(picker2Def,picker2,auth)});attributes.push({meta:placesDef.meta,value:await resolveAttrValue(placesDef,places,auth)});return{state,attributes}}
+async function handleCollect(req,auth,token,env){const body=await req.json(),id=String(body.id||"").trim(),picker1=String(body.picker1||"").trim(),picker2=String(body.picker2||"").trim(),places=Number(body.places);if(!id)return json({error:"Не передан id отгрузки"},400);if(!(await wasFound(token,id,env)))return json({error:"Сначала отсканируйте отгрузку"},403);if(!picker1)return json({error:"Не выбран сборщик"},400);if(!Number.isInteger(places)||places<1)return json({error:"Количество мест должно быть целым числом больше нуля"},400);const r=await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state,attributes`,{headers:{Authorization:auth},cf:{cacheTtl:0,cacheEverything:false}});if(r.status===401)return json({error:"Неверный логин или пароль"},401);if(!r.ok)return json({error:"Не удалось проверить отгрузку"},502);const d=await r.json(),current=d.state?.name||null;if(current===STATUS_COLLECTED_NAME)return json({ok:true,alreadyCollected:true});if(current!==STATUS_NOT_COLLECTED_NAME&&current!==STATUS_URGENT_NAME)return json({error:`Статус уже изменился: сейчас "${current||"—"}"`},409);let ctx;try{ctx=await prepareCollect(auth,picker1,picker2,places)}catch(e){return json({error:"Не удалось подготовить данные сборки"},500)}const payload={state:{meta:{href:ctx.state.meta.href,type:"state",mediaType:"application/json"}},attributes:ctx.attributes};const put=await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}`,{method:"PUT",headers:{Authorization:auth,"Content-Type":"application/json"},body:JSON.stringify(payload)});if(put.status===401)return json({error:"Неверный логин или пароль"},401);if(!put.ok){return json({error:"Не удалось сохранить статус и данные сборки"},502)}const verify=await findDemand(d.name,auth);if(verify.stateName!==STATUS_COLLECTED_NAME)return json({error:"Данные сохранены, но статус не подтвердился при проверке"},502);return json({ok:true,name:d.name,places,pickerName1:picker1,pickerName2:picker2||null,stateName:STATUS_COLLECTED_NAME})}
+async function handleCollectGroup(req,auth,token,env){const body=await req.json(),items=Array.isArray(body.items)?body.items:[],picker1=String(body.picker1||"").trim(),picker2=String(body.picker2||"").trim(),places=Number(body.places);if(!items.length)return json({error:"Не переданы отгрузки"},400);if(items.length>20)return json({error:"В одной упаковке можно объединить максимум 20 отгрузок"},400);if(!picker1)return json({error:"Не выбран сборщик"},400);if(!Number.isInteger(places)||places<1)return json({error:"Количество мест должно быть целым числом больше нуля"},400);const unique=[],seen=new Set();for(const item of items){const id=String(item?.id||"").trim();const name=String(item?.name||"").trim();if(!id||seen.has(id))continue;seen.add(id);unique.push({id,name})}if(!unique.length)return json({error:"Не переданы корректные отгрузки"},400);for(const item of unique){if(!(await wasFound(token,item.id,env)))return json({error:`Сначала отсканируйте отгрузку № ${item.name||item.id}`},403)}const checked=[];for(const item of unique){const r=await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(item.id)}?expand=state,attributes`,{headers:{Authorization:auth},cf:{cacheTtl:0,cacheEverything:false}});if(r.status===401)return json({error:"Неверный логин или пароль"},401);if(!r.ok)return json({error:`Не удалось проверить отгрузку № ${item.name||item.id}`},502);const d=await r.json(),current=d.state?.name||null;if(current===STATUS_COLLECTED_NAME)return json({error:`Отгрузка № ${d.name||item.name} уже имеет статус «${STATUS_COLLECTED_NAME}». Уберите её из упаковки.`},409);if(current!==STATUS_NOT_COLLECTED_NAME&&current!==STATUS_URGENT_NAME)return json({error:`Отгрузка № ${d.name||item.name}: статус уже изменился на «${current||"—"}».`},409);checked.push({id:d.id,name:d.name})}let ctx;try{ctx=await prepareCollect(auth,picker1,picker2,places)}catch(e){return json({error:"Не удалось подготовить данные сборки"},500)}const payload={state:{meta:{href:ctx.state.meta.href,type:"state",mediaType:"application/json"}},attributes:ctx.attributes};const results=[];for(const item of checked){const put=await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(item.id)}`,{method:"PUT",headers:{Authorization:auth,"Content-Type":"application/json"},body:JSON.stringify(payload)});if(put.status===401)return json({error:"Неверный логин или пароль"},401);if(!put.ok){results.push({id:item.id,name:item.name,ok:false,error:"Не удалось сохранить данные сборки"});continue}const verify=await findDemand(item.name,auth);results.push({id:item.id,name:item.name,ok:verify.stateName===STATUS_COLLECTED_NAME,error:verify.stateName===STATUS_COLLECTED_NAME?null:"Данные сохранены, но статус не подтвердился"})}const failed=results.filter(x=>!x.ok);return json({ok:failed.length===0,partial:failed.length>0&&failed.length<results.length,results,pickerName1:picker1,pickerName2:picker2||null,places,stateName:STATUS_COLLECTED_NAME,error:failed.length?`Не удалось обработать ${failed.length} из ${results.length} отгрузок.`:null},failed.length?502:200)}
+async function bitrixCall(webhook,method,payload){const r=await fetch(`${webhook}/${method}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const data=await r.json().catch(()=>({}));if(!r.ok||data.error)throw new Error(data.error_description||data.error||`Bitrix ${r.status}`);return data}
+async function handlePhotoUpload(req,auth,token,env){if(!env.BITRIX_WEBHOOK_URL)return json({error:"Интеграция с Bitrix24 не настроена"},500);if(!(await verifyAuth(auth)))return json({error:"Неверный логин или пароль"},401);const body=await req.json(),numbers=Array.isArray(body.numbers)?body.numbers.map(x=>String(x||"").trim()).filter(Boolean):(body.number?[String(body.number).trim()]:[]),photos=Array.isArray(body.photos)?body.photos:[],by=String(body.by||"").trim();if(!numbers.length)return json({error:"Не переданы номера отгрузок"},400);if(numbers.length>20)return json({error:"В одной упаковке можно указать максимум 20 отгрузок"},400);for(const number of numbers){if(!(await wasFoundByName(token,number,env)))return json({error:`Сначала отсканируйте отгрузку № ${number}`},403)}if(!photos.length)return json({error:"Нет фотографий"},400);if(photos.length>10)return json({error:"За один раз можно загрузить максимум 10 фото"},400);const webhook=env.BITRIX_WEBHOOK_URL.replace(/\/$/,"");const caption=`${numbers.length===1?"Отгрузка":"Отгрузки"} ${numbers.map(n=>`№ ${n}`).join(", ")}${by?` (загрузил: ${by})`:""}`;let uploaded=0;for(let i=0;i<photos.length;i++){const p=photos[i];if(!p?.content)continue;const name=String(p.name||`orders-${numbers.join("-")}-${i+1}.jpg`).replace(/[^a-zA-Z0-9А-Яа-я._-]/g,"_");const data=await bitrixCall(webhook,"im.v2.File.upload",{dialogId:BITRIX_DIALOG_ID,fields:{name,content:p.content,message:caption}});uploaded++;}return json({ok:true,numbers,uploaded})}
+export default {async fetch(request,env){const url=new URL(request.url);if(request.method==="OPTIONS")return new Response(null,{headers:corsHeaders()});const isApi=url.pathname==="/login"||url.pathname==="/find"||url.pathname==="/collect"||url.pathname==="/collect-group"||url.pathname==="/photo/upload";if(!isApi)return env.ASSETS.fetch(request);try{if(url.pathname==="/login"&&request.method==="POST")return await handleLogin(request,env);const token=getSessionToken(request);const auth=await getSessionAuth(request,env);if(!token||!auth)return unauthorized();if(url.pathname==="/find"&&request.method==="GET")return await handleFind(url,auth,token,env);if(url.pathname==="/collect"&&request.method==="POST")return await handleCollect(request,auth,token,env);if(url.pathname==="/collect-group"&&request.method==="POST")return await handleCollectGroup(request,auth,token,env);if(url.pathname==="/photo/upload"&&request.method==="POST")return await handlePhotoUpload(request,auth,token,env);return json({error:"Действие не разрешено"},403)}catch(e){return json({error:"Внутренняя ошибка"},500)}}}
