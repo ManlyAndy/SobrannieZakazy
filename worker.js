@@ -93,10 +93,12 @@ async function resolveAttrValue(attr,rawValue,auth){
   return rawValue;
 }
 async function handleCollect(req,auth){
-  const body=await req.json(),id=String(body.id||"").trim(),picker1=String(body.picker1||"").trim(),picker2=String(body.picker2||"").trim(),places=Number(body.places),dimensions=String(body.dimensions||"").trim();
+  const body=await req.json(),id=String(body.id||"").trim(),picker1=String(body.picker1||"").trim(),picker2=String(body.picker2||"").trim(),dimensions=String(body.dimensions||"").trim();
+  const placesRaw=body.places;
+  const places=(placesRaw===undefined||placesRaw===null||placesRaw==="")?null:Number(placesRaw);
   if(!id)return json({error:"Не передан id отгрузки"},400);
   if(!picker1)return json({error:"Не выбран сборщик"},400);
-  if(!Number.isInteger(places)||places<1)return json({error:"Количество мест должно быть целым числом больше нуля"},400);
+  if(places!==null&&(!Number.isInteger(places)||places<1))return json({error:"Количество мест должно быть целым числом больше нуля"},400);
 
   const r=await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state,attributes`,{headers:{Authorization:auth},cf:{cacheTtl:0,cacheEverything:false}});
   if(r.status===401)return json({error:"Неверный логин или пароль"},401);
@@ -117,11 +119,18 @@ async function handleCollect(req,auth){
 
   const picker1Def=findAttrDef(defs,PICKER_FIELD_1_NAME);
   const picker2Def=findAttrDef(defs,PICKER_FIELD_2_NAME);
-  const placesDef=findAttrDef(defs,PLACES_FIELD_NAME);
-  if(!picker1Def||!picker2Def||!placesDef){
+  if(!picker1Def||!picker2Def){
     const found=defs.map(a=>`${a.name} [${a.type}]`);
-    const missing=[!picker1Def?PICKER_FIELD_1_NAME:null,!picker2Def?PICKER_FIELD_2_NAME:null,!placesDef?PLACES_FIELD_NAME:null].filter(Boolean);
+    const missing=[!picker1Def?PICKER_FIELD_1_NAME:null,!picker2Def?PICKER_FIELD_2_NAME:null].filter(Boolean);
     return json({error:`Поле(-я) не найдены в настройках Отгрузки: ${missing.join(", ")}. Реальные названия полей: ${found.join(" | ")||"(пусто)"}`},500);
+  }
+  let placesDef=null;
+  if(places!==null){
+    placesDef=findAttrDef(defs,PLACES_FIELD_NAME);
+    if(!placesDef){
+      const found=defs.map(a=>`${a.name} [${a.type}]`);
+      return json({error:`Поле "${PLACES_FIELD_NAME}" не найдено в настройках Отгрузки. Реальные названия полей: ${found.join(" | ")||"(пусто)"}`},500);
+    }
   }
 
   const attributes=[];
@@ -129,7 +138,7 @@ async function handleCollect(req,auth){
   try{
     attributes.push({meta:picker1Def.meta,value:await resolveAttrValue(picker1Def,picker1,auth)});
     if(picker2)attributes.push({meta:picker2Def.meta,value:await resolveAttrValue(picker2Def,picker2,auth)});
-    attributes.push({meta:placesDef.meta,value:await resolveAttrValue(placesDef,places,auth)});
+    if(places!==null)attributes.push({meta:placesDef.meta,value:await resolveAttrValue(placesDef,places,auth)});
     if(dimensions){
       const dimensionsDef=findAttrDef(defs,DIMENSIONS_FIELD_NAME);
       if(dimensionsDef)attributes.push({meta:dimensionsDef.meta,value:await resolveAttrValue(dimensionsDef,dimensions,auth)});
