@@ -1,5 +1,7 @@
 let scanner = null;
 let currentOrder = null;
+let extraOrders = [];
+let scanMode = "main";
 let photoFiles = [];
 let photoBusy = false;
 
@@ -29,17 +31,55 @@ function startScanner(){
     if(!cameras.length){$("reader").innerHTML='<p class="error">Камера не найдена.</p>';return}
     const cam=cameras.find(c=>/back|rear|environment/i.test(c.label))||cameras[0];
     scanner.start(cam.id,{fps:10,qrbox:{width:270,height:150},formatsToSupport:[Html5QrcodeSupportedFormats.CODE_128]},
-      text=>{stopScanner();lookup(text.trim())},()=>{}
+      text=>{stopScanner();handleScanResult(text.trim())},()=>{}
     ).catch(()=>{$("reader").innerHTML='<p class="error">Не удалось открыть камеру. Разрешите доступ к камере.</p><button class="btn-secondary" onclick="startScanner()">Повторить</button>'});
   }).catch(()=>{$("reader").innerHTML='<p class="error">Нет доступа к камере.</p>'});
 }
 function enterScan(){
+  scanMode="main";
   $("who-label").textContent=user();$("who-label-2").textContent=user();
   show("scan");setTimeout(startScanner,250);
 }
+function addExtraOrderScan(){
+  scanMode="extra";
+  $("who-label").textContent=user();$("who-label-2").textContent=user();
+  show("scan");setTimeout(startScanner,250);
+}
+function handleScanResult(code){
+  if(!code)return;
+  if(scanMode==="extra"){
+    addExtraNumber(code);
+    scanMode="main";
+    show("result");
+    renderOrder(currentOrder);
+    return;
+  }
+  lookup(code);
+}
+function renderScannedList(){
+  const el=$("scanned-list");
+  if(!el)return;
+  if(!currentOrder){el.innerHTML="";return}
+  const items=[currentOrder.name,...extraOrders];
+  el.innerHTML=`<div class="hint">Отсканировано (${items.length}):</div><div class="chips">${items.map((n,i)=>i===0
+    ?`<span class="chip-main">${esc(n)}</span>`
+    :`<button type="button" class="chip chip-active" onclick="removeExtraNumber('${esc(n).replace(/'/g,"\\'")}')">${esc(n)} ✕</button>`
+  ).join("")}</div>`;
+}
+function addExtraNumber(code){
+  if(!currentOrder)return;
+  if(code===currentOrder.name){alert("Это и есть первая отсканированная накладная");return}
+  if(extraOrders.includes(code))return;
+  extraOrders.push(code);
+  renderScannedList();
+}
+function removeExtraNumber(code){
+  extraOrders=extraOrders.filter(x=>x!==code);
+  renderScannedList();
+}
 function showManual(){$("manual").classList.toggle("hidden")}
 function manualLookup(){
-  const v=$("manual-code").value.trim();if(v){stopScanner();lookup(v)}
+  const v=$("manual-code").value.trim();if(v){stopScanner();handleScanResult(v)}
 }
 function backToScan(){
   $("manual").classList.add("hidden");$("manual-code").value="";
@@ -63,6 +103,8 @@ async function doLogin(){
 }
 function logout(){
   ["collected_auth","collected_user","collected_day"].forEach(k=>localStorage.removeItem(k));
+  scanMode="main";extraOrders=[];currentOrder=null;
+  if($("scanned-list"))$("scanned-list").innerHTML="";
   stopScanner();show("login");
 }
 
@@ -75,6 +117,8 @@ async function lookup(code){
     const d=await r.json();
     if(!d.found){renderNotFound(code);return}
     currentOrder=d;
+    extraOrders=[];
+    renderScannedList();
     if(d.alreadyCollected){renderCollected(d);return}
     if(!d.collectable){renderWrongStatus(d);return}
     renderOrder(d);
@@ -112,6 +156,7 @@ function renderOrder(d){
     <div class="meta">Текущий статус: <b>${esc(d.stateName)}</b></div>
     <div class="meta">Количество мест: <b>${esc(d.places==null?"—":d.places)}</b></div>
   </div>
+  <button class="btn-secondary" onclick="addExtraOrderScan()">+ Ещё (доп. накладная)</button>
   <button class="btn-success" onclick="openCollectModal()">Сменить статус</button>
   <button class="btn-secondary" onclick="openPhotoModal()">Сделать фото</button>`;
 }
@@ -123,18 +168,20 @@ function renderDimensionRows(){
       <input type="text" inputmode="decimal" class="dim-input" placeholder="Ширина/Ø" value="${esc(row.w)}" oninput="updateDim(${i},'w',this.value)">
       <input type="text" inputmode="decimal" class="dim-input" placeholder="Высота" value="${esc(row.h)}" oninput="updateDim(${i},'h',this.value)">
       <input type="text" inputmode="decimal" class="dim-input" placeholder="Вес,кг" value="${esc(row.kg)}" oninput="updateDim(${i},'kg',this.value)">
+      <button type="button" class="dim-dup" onclick="duplicateDimRow(${i})" title="Дублировать строку">⧉</button>
       <button type="button" class="dim-remove" onclick="removeDimRow(${i})">✕</button>
     </div>`).join("");
 }
 function updateDim(i,key,val){dimensionRows[i][key]=val}
 function addDimensionRow(){dimensionRows.push({l:"",w:"",h:"",kg:""});renderDimensionRows()}
+function duplicateDimRow(i){dimensionRows.splice(i+1,0,{...dimensionRows[i]});renderDimensionRows()}
 function removeDimRow(i){dimensionRows.splice(i,1);renderDimensionRows()}
 function buildDimensionsString(){
   return dimensionRows.map(r=>{
     const dims=[r.l,r.w,r.h].map(v=>String(v||"").trim()).filter(Boolean);
     const kg=String(r.kg||"").trim();
     if(!dims.length&&!kg)return null;
-    return dims.join("*")+(kg?` ${kg}`:"");
+    return dims.join("*")+(kg?` ${kg} кг`:"");
   }).filter(Boolean).join("; ");
 }
 function openCollectModal(){
@@ -163,7 +210,11 @@ async function collectOrder(){
   const picker1=$("picker-input-1").value.trim();
   const picker2=$("picker-input-2").value.trim();
   const places=Number($("places-input").value);
-  const dimensions=buildDimensionsString();
+  let dimensions=buildDimensionsString();
+  if(extraOrders.length){
+    const suffix=`вместе с ${extraOrders.join(", ")}`;
+    dimensions=dimensions?`${dimensions} ${suffix}`:suffix;
+  }
   if(!picker1){alert("Впишите имя сборщика №1");return}
   if(!Number.isInteger(places)||places<1){alert("Укажите количество мест");return}
   const btn=document.querySelector("#order-content .btn-success");
@@ -176,11 +227,30 @@ async function collectOrder(){
     if(r.status===401){logout();return}
     const d=await r.json();
     if(!d.ok){alert(d.error||"Не удалось изменить статус");btn.disabled=false;btn.textContent="Сменить статус";return}
+
+    const failed=[];
+    for(const num of extraOrders){
+      try{
+        const fr=await fetch(`${CONFIG.PROXY_URL}/find?code=${encodeURIComponent(num)}&_=${Date.now()}`,{headers:{Authorization:auth()},cache:"no-store"});
+        const fd=await fr.json();
+        if(!fd.found){failed.push(`${num}: не найдена`);continue}
+        if(fd.alreadyCollected)continue;
+        if(!fd.collectable){failed.push(`${num}: статус "${fd.stateName||"—"}"`);continue}
+        const cr=await fetch(`${CONFIG.PROXY_URL}/collect`,{
+          method:"POST",headers:{"Authorization":auth(),"Content-Type":"application/json"},
+          body:JSON.stringify({id:fd.id,picker1,picker2})
+        });
+        const cd=await cr.json();
+        if(!cd.ok)failed.push(`${num}: ${cd.error||"ошибка"}`);
+      }catch(e){failed.push(`${num}: нет соединения`)}
+    }
+
     currentOrder.stateName=CONFIG.STATUS_COLLECTED_NAME;
     currentOrder.alreadyCollected=true;
     currentOrder.pickerName1=picker1;currentOrder.pickerName2=picker2||null;currentOrder.places=places;currentOrder.dimensions=dimensions||null;
     closeOrderModal();
-    $("result-body").innerHTML=`<div class="card ok"><div class="badge ok">СОБРАНО ✓</div><div class="num">№ ${esc(currentOrder.name)}</div><div class="meta">Сборщик(и): <b>${esc(pickersLabel(picker1,picker2))}</b></div><div class="meta">Количество мест: <b>${places}</b></div>${dimensions?`<div class="meta">Габариты: <b>${esc(dimensions)}</b></div>`:""}<p class="meta">Статус успешно изменён в МойСклад.</p>${d.warning?`<p class="meta" style="color:#f59e0b">${esc(d.warning)}</p>`:""}</div><button class="btn-secondary" onclick="openPhotoModal()">Сделать фото</button>`;
+    const allNumbers=[currentOrder.name,...extraOrders];
+    $("result-body").innerHTML=`<div class="card ok"><div class="badge ok">СОБРАНО ✓</div><div class="num">№ ${esc(allNumbers.join(", "))}</div><div class="meta">Сборщик(и): <b>${esc(pickersLabel(picker1,picker2))}</b></div><div class="meta">Количество мест: <b>${places}</b></div>${dimensions?`<div class="meta">Габариты: <b>${esc(dimensions)}</b></div>`:""}<p class="meta">Статус успешно изменён в МойСклад.</p>${d.warning?`<p class="meta" style="color:#f59e0b">${esc(d.warning)}</p>`:""}${failed.length?`<p class="meta" style="color:#f87171">Не удалось для: ${esc(failed.join("; "))}</p>`:""}</div><button class="btn-secondary" onclick="openPhotoModal()">Сделать фото</button>`;
   }catch(e){alert("Нет соединения с сервером")}
   finally{btn.disabled=false;btn.textContent="Сменить статус"}
 }
@@ -244,7 +314,7 @@ async function uploadPhotos(){
     }
     const r=await fetch(`${CONFIG.PROXY_URL}/photo/upload`,{
       method:"POST",headers:{"Authorization":auth(),"Content-Type":"application/json"},
-      body:JSON.stringify({number:currentOrder.name,photos,by:user()})
+      body:JSON.stringify({number:[currentOrder.name,...extraOrders].join("_"),photos,by:user()})
     });
     if(r.status===401){logout();return}
     const d=await r.json();
