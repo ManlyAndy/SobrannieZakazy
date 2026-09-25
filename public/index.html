@@ -38,10 +38,13 @@ button{width:100%;padding:15px;border:0;border-radius:11px;font-size:16px;font-w
 .chip{width:auto;margin:0;padding:9px 14px;font-size:14px;font-weight:600;border-radius:999px;background:#374151;color:#e5e7eb}
 .chip-active{background:#2563eb;color:#fff}
 .actions3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}.actions3 button{margin:0}
-.dim-row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:6px;margin-bottom:8px;align-items:center}
+.dim-row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto auto;gap:6px;margin-bottom:8px;align-items:center}
 .dim-input{padding:8px;font-size:13px;margin:0}
 .dim-remove{width:auto;margin:0;padding:8px 10px;background:#374151;color:#f87171;border-radius:8px;font-size:14px}
+.dim-dup{width:auto;margin:0;padding:8px 10px;background:#374151;color:#9ca3af;border-radius:8px;font-size:14px}
 .dim-add{width:auto;margin:0 0 14px;padding:9px 14px;font-size:13px}
+.scanned-list{margin:12px 0}
+.chip-main{width:auto;margin:0;padding:9px 14px;font-size:14px;font-weight:600;border-radius:999px;background:#166534;color:#fff}
 .spinner{width:30px;height:30px;border:3px solid #374151;border-top-color:#60a5fa;border-radius:50%;animation:spin .8s linear infinite;margin:24px auto}
 @keyframes spin{to{transform:rotate(360deg)}}
 </style>
@@ -50,7 +53,7 @@ button{width:100%;padding:15px;border:0;border-radius:11px;font-size:16px;font-w
 
 <div id="screen-login" class="screen active">
   <h1>Собранные заказы</h1>
-  <p class="hint">Вход выполняется обычным логином и паролем МойСклад.</p>
+  <p class="hint">Вход через МойСклад.</p>
   <input id="login-user" placeholder="Логин (email)" autocomplete="username">
   <input id="login-pass" type="password" placeholder="Пароль" autocomplete="current-password">
   <button class="btn-primary" onclick="doLogin()">Войти</button>
@@ -64,7 +67,7 @@ button{width:100%;padding:15px;border:0;border-radius:11px;font-size:16px;font-w
   </div>
   <h1>Сканируйте отгрузку</h1>
   <div id="reader"></div>
-  <p class="hint" style="text-align:center">Наведите камеру на штрихкод отгрузки. Допустимые исходные статусы: «Не собрано» и «Срочнее некуда».</p>
+  <p class="hint" style="text-align:center">Наведите камеру на штрихкод. Допустимые статусы: «Не собрано» и «Срочнее некуда».</p>
   <button class="btn-secondary" onclick="showManual()">Ввести номер вручную</button>
   <div id="manual" class="hidden">
     <input id="manual-code" inputmode="numeric" placeholder="Номер отгрузки">
@@ -78,6 +81,7 @@ button{width:100%;padding:15px;border:0;border-radius:11px;font-size:16px;font-w
     <button class="link-btn" onclick="logout()">Выйти</button>
   </div>
   <div id="result-body"></div>
+  <div id="scanned-list" class="scanned-list"></div>
   <button class="btn-secondary" onclick="backToScan()">← Сканировать следующий</button>
 </div>
 
