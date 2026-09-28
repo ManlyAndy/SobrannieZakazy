@@ -4,6 +4,7 @@ let extraOrders = [];
 let scanMode = "main";
 let photoFiles = [];
 let photoBusy = false;
+let photoReplace = false;
 
 function $(id){return document.getElementById(id)}
 function esc(v){const d=document.createElement("div");d.textContent=v==null?"":String(v);return d.innerHTML}
@@ -68,7 +69,7 @@ function renderScannedList(){
 }
 function addExtraNumber(code){
   if(!currentOrder)return;
-  if(code===currentOrder.name){alert("Это и есть первая отсканированная накладная");return}
+  if(code===currentOrder.name){alert("Это первая отсканированная накладная");return}
   if(extraOrders.includes(code))return;
   extraOrders.push(code);
   renderScannedList();
@@ -89,7 +90,7 @@ function backToScan(){
 async function doLogin(){
   const login=$("login-user").value.trim(), pass=$("login-pass").value, err=$("login-error");
   err.textContent="";
-  if(!login||!pass){err.textContent="Заполните логин и пароль";return}
+  if(!login||!pass){err.textContent="Введите логин и пароль";return}
   const h="Basic "+btoa(unescape(encodeURIComponent(login+":"+pass)));
   try{
     const r=await fetch(`${CONFIG.PROXY_URL}/find?code=__login_check__`,{headers:{Authorization:h},cache:"no-store"});
@@ -131,14 +132,14 @@ function renderNotFound(code){
   $("result-body").innerHTML=`<div class="card bad"><div class="badge bad">НЕ НАЙДЕНО</div><div class="num">№ ${esc(code)}</div><p class="meta">Отгрузка с таким номером не найдена.</p></div>`;
 }
 function renderWrongStatus(d){
-  $("result-body").innerHTML=`<div class="card bad"><div class="badge bad">НЕ ГОТОВО</div><div class="num">№ ${esc(d.name)}</div><div class="meta">Покупатель: <b>${esc(d.agentName)}</b></div><div class="meta">Текущий статус: <b>${esc(d.stateName||"—")}</b></div><p class="meta">Для этого приложения допустимы статусы «${esc(CONFIG.STATUS_NOT_COLLECTED_NAME)}» и «${esc(CONFIG.STATUS_URGENT_NAME)}».</p></div>`;
+  $("result-body").innerHTML=`<div class="card bad"><div class="badge bad">НЕ ГОТОВО</div><div class="num">№ ${esc(d.name)}</div><div class="meta">Покупатель: <b>${esc(d.agentName)}</b></div><div class="meta">Текущий статус: <b>${esc(d.stateName||"—")}</b></div><p class="meta">Для этого приложения допустимы статусы «${esc(CONFIG.STATUS_NOT_COLLECTED_NAME)}» и «${esc(CONFIG.STATUS_URGENT_NAME)}».</p></div><button class="btn-secondary" onclick="openPhotoModal(true)">📷 Изменить фото</button>`;
 }
 function pickersLabel(p1,p2){
   if(!p1)return "—";
   return p2?`${p1}, ${p2}`:p1;
 }
 function renderCollected(d){
-  $("result-body").innerHTML=`<div class="card ok"><div class="badge ok">УЖЕ СОБРАНО ✓</div><div class="num">№ ${esc(d.name)}</div><div class="meta">Покупатель: <b>${esc(d.agentName)}</b></div><div class="meta">Сборщик(и): <b>${esc(pickersLabel(d.pickerName1,d.pickerName2))}</b></div><div class="meta">Количество мест: <b>${esc(d.places==null?"—":d.places)}</b></div>${d.dimensions?`<div class="meta">Габариты: <b>${esc(d.dimensions)}</b></div>`:""}</div>`;
+  $("result-body").innerHTML=`<div class="card ok"><div class="badge ok">УЖЕ СОБРАНО ✓</div><div class="num">№ ${esc(d.name)}</div><div class="meta">Покупатель: <b>${esc(d.agentName)}</b></div><div class="meta">Сборщик(и): <b>${esc(pickersLabel(d.pickerName1,d.pickerName2))}</b></div><div class="meta">Количество мест: <b>${esc(d.places==null?"—":d.places)}</b></div>${d.dimensions?`<div class="meta">Габариты: <b>${esc(d.dimensions)}</b></div>`:""}</div><button class="btn-secondary" onclick="openPhotoModal(true)">📷 Изменить фото</button>`;
 }
 function pickerChips(selected,targetId){
   return CONFIG.PICKER_NAMES.map(n=>`<button type="button" class="chip${n===selected?" chip-active":""}" onclick="selectPicker('${esc(n).replace(/'/g,"\\'")}','${targetId}')">${esc(n)}</button>`).join("");
@@ -158,7 +159,8 @@ function renderOrder(d){
   </div>
   <button class="btn-secondary" onclick="addExtraOrderScan()">+ Ещё (доп. накладная)</button>
   <button class="btn-success" onclick="openCollectModal()">Сменить статус</button>
-  <button class="btn-secondary" onclick="openPhotoModal()">Сделать фото</button>`;
+  <button class="btn-secondary" onclick="openPhotoModal(false)">Сделать фото</button>
+  <button class="btn-secondary" onclick="openPhotoModal(true)">📷 Изменить фото</button>`;
 }
 let dimensionRows=[];
 function renderDimensionRows(){
@@ -256,11 +258,12 @@ async function collectOrder(){
 }
 
 let lastPhotoSource="gallery";
-function openPhotoModal(){
+function openPhotoModal(replace=false){
   if(!currentOrder)return;
+  photoReplace=!!replace;
   photoFiles=[];
-  $("photo-title").textContent=`Фото отгрузки № ${currentOrder.name}`;
-  $("photo-status").textContent="";
+  $("photo-title").textContent=photoReplace?`Изменить фото отгрузки № ${currentOrder.name}`:`Фото отгрузки № ${currentOrder.name}`;
+  $("photo-status").textContent=photoReplace?"Новые фото заменят ранее загруженные фото этой отгрузки.":"";
   $("photo-input-camera").value="";
   $("photo-input-gallery").value="";
   renderPhotoGrid();
@@ -314,12 +317,12 @@ async function uploadPhotos(){
     }
     const r=await fetch(`${CONFIG.PROXY_URL}/photo/upload`,{
       method:"POST",headers:{"Authorization":auth(),"Content-Type":"application/json"},
-      body:JSON.stringify({number:[currentOrder.name,...extraOrders].join("_"),photos,by:user()})
+      body:JSON.stringify({number:[currentOrder.name,...extraOrders].join("_"),photos,by:user(),replace:photoReplace})
     });
     if(r.status===401){logout();return}
     const d=await r.json();
     if(!d.ok)throw new Error(d.error||"upload");
-    $("photo-status").textContent=`Загружено: ${d.uploaded} фото`;
+    $("photo-status").textContent=photoReplace?`Фото заменены: загружено ${d.uploaded}. Удалено старых сообщений: ${d.deleted||0}`:`Загружено: ${d.uploaded} фото`;
     setTimeout(closePhotoModal,700);
   }catch(e){$("photo-status").textContent="Не удалось загрузить фото. Проверьте настройки Bitrix24."}
   finally{photoBusy=false}
