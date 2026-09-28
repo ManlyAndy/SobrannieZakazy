@@ -170,13 +170,34 @@ async function bitrixCall(webhook,method,payload){
 async function handlePhotoUpload(req,auth,env){
   if(!env.BITRIX_WEBHOOK_URL)return json({error:"Интеграция с Bitrix24 не настроена"},500);
   if(!(await verifyAuth(auth)))return json({error:"Неверный логин или пароль"},401);
-  const body=await req.json(),number=String(body.number||"").trim(),photos=Array.isArray(body.photos)?body.photos:[],by=String(body.by||"").trim();
+  const body=await req.json(),number=String(body.number||"").trim(),photos=Array.isArray(body.photos)?body.photos:[],by=String(body.by||"").trim(),replace=body.replace===true;
   if(!number)return json({error:"Не передан номер отгрузки"},400);
   if(!photos.length)return json({error:"Нет фотографий"},400);
   if(photos.length>10)return json({error:"За один раз можно загрузить максимум 10 фото"},400);
 
   const webhook=env.BITRIX_WEBHOOK_URL.replace(/\/$/,"");
   const caption=`Отгрузка № ${number}${by?` (загрузил: ${by})`:""}`;
+  let deleted=0;
+
+  if(replace){
+    const search=await bitrixCall(webhook,"im.dialog.messages.search",{
+      CHAT_ID:BITRIX_CHAT_ID,
+      SEARCH_MESSAGE:`Отгрузка № ${number}`,
+      ORDER:{ID:"DESC"},
+      LIMIT:200
+    });
+    const messages=Array.isArray(search.result?.messages)?search.result.messages:[];
+    const prefix=`Отгрузка № ${number}`;
+    for(const msg of messages){
+      const text=String(msg.text||"").trim();
+      if(!text.startsWith(prefix))continue;
+      try{
+        await bitrixCall(webhook,"im.message.delete",{MESSAGE_ID:Number(msg.id)});
+        deleted++;
+      }catch(e){}
+    }
+  }
+
   let uploaded=0;const results=[];
   for(let i=0;i<photos.length;i++){
     const p=photos[i];
@@ -188,7 +209,7 @@ async function handlePhotoUpload(req,auth,env){
     });
     uploaded++;results.push({name,result:data.result});
   }
-  return json({ok:true,number,uploaded,results});
+  return json({ok:true,number,uploaded,deleted,results});
 }
 
 async function handleBitrixTest(auth,env){
