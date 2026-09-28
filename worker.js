@@ -1,6 +1,6 @@
 const API_BASE="https://api.moysklad.ru/api/remap/1.2";
 const STATUS_NOT_COLLECTED_NAME="Не собрано";
-const STATUS_URGENT_NAME="Срочнее некуда";
+const STATUS_URGENT_NAME="СРОЧНЕЕ НЕКУДА";
 const STATUS_COLLECTED_NAME="Собрано";
 const PLACES_FIELD_NAME="Количество мест";
 const DIMENSIONS_FIELD_NAME="Габариты";
