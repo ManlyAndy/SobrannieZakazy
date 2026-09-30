@@ -177,7 +177,7 @@ function renderOrder(d){
     <div class="meta">Текущий статус: <b>${esc(d.stateName)}</b></div>
     <div class="meta">Количество мест: <b>${esc(d.places==null?"—":d.places)}</b></div>
   </div>
-  <button class="btn-secondary" onclick="addExtraOrderScan()">+ Ещё (доп. накладная)</button>
+  <button class="btn-secondary" onclick="addExtraOrderScan()">добавить накладную</button>
   <button class="btn-success" onclick="openCollectModal()">Сменить статус</button>
   <button class="btn-secondary" onclick="openPhotoModal(false)">Сделать фото</button>
   <button class="btn-secondary" onclick="openPhotoModal(true)">📷 Изменить фото</button>`;
@@ -283,7 +283,7 @@ function openPhotoModal(replace=false){
   photoReplace=!!replace;
   photoFiles=[];
   $("photo-title").textContent=photoReplace?`Изменить фото отгрузки № ${currentOrder.name}`:`Фото отгрузки № ${currentOrder.name}`;
-  $("photo-status").textContent=photoReplace?"Новые фото заменят ранее загруженные фото этой отгрузки.":"";
+  $("photo-status").textContent=photoReplace?"Новые фото заменят ранее загруженные":"";
   $("photo-input-camera").value="";
   $("photo-input-gallery").value="";
   renderPhotoGrid();
