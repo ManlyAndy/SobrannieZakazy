@@ -5,6 +5,8 @@ let scanMode = "main";
 let photoFiles = [];
 let photoBusy = false;
 let photoReplace = false;
+const SHIPMENT_CODE_RE = /^\d{5}$/;
+function isValidShipmentCode(c){return SHIPMENT_CODE_RE.test(String(c||"").trim())}
 
 function $(id){return document.getElementById(id)}
 function esc(v){const d=document.createElement("div");d.textContent=v==null?"":String(v);return d.innerHTML}
@@ -46,8 +48,25 @@ function addExtraOrderScan(){
   $("who-label").textContent=user();$("who-label-2").textContent=user();
   show("scan");setTimeout(startScanner,250);
 }
+function renderBadCode(code){
+  $("result-body").innerHTML=`<div class="card bad"><div class="badge bad">НЕВЕРНЫЙ ШК</div><div class="num">${esc(code)}</div><p class="meta">Неверный ШК. Номер отгрузки должен состоять из 5 цифр.</p></div>`;
+  $("scanned-list").innerHTML="";
+}
 function handleScanResult(code){
   if(!code)return;
+  if(!isValidShipmentCode(code)){
+    if(scanMode==="extra"&&currentOrder){
+      scanMode="main";
+      show("result");
+      renderOrder(currentOrder);
+      alert("Неверный ШК: "+code);
+    }else{
+      scanMode="main";
+      show("result");
+      renderBadCode(code);
+    }
+    return;
+  }
   if(scanMode==="extra"){
     addExtraNumber(code);
     scanMode="main";
@@ -69,6 +88,7 @@ function renderScannedList(){
 }
 function addExtraNumber(code){
   if(!currentOrder)return;
+  if(!isValidShipmentCode(code)){alert("Неверный ШК: "+code);return}
   if(code===currentOrder.name){alert("Это первая отсканированная накладная");return}
   if(extraOrders.includes(code))return;
   extraOrders.push(code);
