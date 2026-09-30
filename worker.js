@@ -98,7 +98,7 @@ async function handleCollect(req,auth){
   const places=(placesRaw===undefined||placesRaw===null||placesRaw==="")?null:Number(placesRaw);
   if(!id)return json({error:"Не передан id отгрузки"},400);
   if(!picker1)return json({error:"Не выбран сборщик"},400);
-  if(places!==null&&(!Number.isInteger(places)||places<1))return json({error:"Количество мест должно быть целым числом больше нуля"},400);
+  if(places!==null&&(!Number.isInteger(places)||places<1))return json({error:"Количество мест должно быть не менее 1"},400);
 
   const r=await fetch(`${API_BASE}/entity/demand/${encodeURIComponent(id)}?expand=state,attributes`,{headers:{Authorization:auth},cf:{cacheTtl:0,cacheEverything:false}});
   if(r.status===401)return json({error:"Неверный логин или пароль"},401);
@@ -154,7 +154,7 @@ async function handleCollect(req,auth){
     method:"PUT",headers:{Authorization:auth,"Content-Type":"application/json"},body:JSON.stringify(payload)
   });
   if(put.status===401)return json({error:"Неверный логин или пароль"},401);
-  if(!put.ok){let details="";try{details=await put.text()}catch(e){}return json({error:"Не удалось сохранить статус и данные сборки",status:put.status,details},502)}
+  if(!put.ok){let details="";try{details=await put.text()}catch(e){}return json({error:"Не удалось сохранить",status:put.status,details},502)}
 
   const verify=await findDemand(d.name,auth);
   if(verify.stateName!==STATUS_COLLECTED_NAME)return json({error:"Данные сохранены, но статус не подтвердился при проверке"},502);
@@ -173,7 +173,7 @@ async function handlePhotoUpload(req,auth,env){
   const body=await req.json(),number=String(body.number||"").trim(),photos=Array.isArray(body.photos)?body.photos:[],by=String(body.by||"").trim(),replace=body.replace===true;
   if(!number)return json({error:"Не передан номер отгрузки"},400);
   if(!photos.length)return json({error:"Нет фотографий"},400);
-  if(photos.length>10)return json({error:"За один раз можно загрузить максимум 10 фото"},400);
+  if(photos.length>10)return json({error:"максимум 10 фото"},400);
 
   const webhook=env.BITRIX_WEBHOOK_URL.replace(/\/$/,"");
   const caption=`Отгрузка № ${number}${by?` (загрузил: ${by})`:""}`;
